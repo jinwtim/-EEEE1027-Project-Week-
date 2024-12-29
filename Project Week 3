@@ -1,105 +1,129 @@
-A#include "CytronMotorDriver.h"
-#include <Wire.h>
-#include <Adafruit_LiquidCrystal.h>
-#include <PinChangeInterrupt.h> 
+#include "CytronMotorDriver.h" // Library for controlling Cytron motor drivers
+#include <Wire.h>              // Library for I2C communication
+#include <Adafruit_LiquidCrystal.h> // Library for controlling LCD
+#include <PinChangeInterrupt.h>     // Library for handling pin change interrupts
 
-Adafruit_LiquidCrystal lcd(8,9,7,2,3,4);
+// Initialize LCD with the specified pins
+Adafruit_LiquidCrystal lcd(8, 9, 7, 2, 3, 4);
 
+// MPU6050 I2C address
 const int MPU_addr = 0x68;
+// Variables for storing raw sensor data
 int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
 
+// Variables for tracking time and processing data
 unsigned long timeTaken;
 
-int minVal = 265;
-int maxVal = 402;
+int minVal = 265;  // Minimum value for accelerometer calibration
+int maxVal = 402;  // Maximum value for accelerometer calibration
 
-float distance;
-int distance_temp;
+float distance;      // Variable to store distance traveled
+int distance_temp;   // Temporary variable for distance
 
+// Variables to store angle calculations
 double x;
 double y;
 double z;
 
+// Flags for controlling program flow
 bool flag1 = true;
 bool flag2 = false;
 bool flag3 = false;
 bool flag4 = false;
 bool flag5 = false;
 
+// Variables for IR sensor readings
 int IR_left;
 int IR_right;
 
+// Variables for encoder counts
 volatile int leftEncoderCount = 0;   // Count pulses for left encoder
 volatile int rightEncoderCount = 0; // Count pulses for right encoder
 
+// Pin definitions for encoders
 const int encoderL = 13;  // Left encoder connected to A5
 const int encoderR = 12;  // Right encoder connected to pin 13
 
-const float wheelCircumference = 20.106; // Circumference in cm (radius = 3.2 cm)
-const int pulsesPerRevolution = 20;      // Number of pulses per wheel rotation
+// Constants for encoder and wheel measurements
+const float wheelCircumference = 20.106; // Wheel circumference in cm (radius = 3.2 cm)
+const int pulsesPerRevolution = 20;      // Pulses per wheel revolution
 
+// Motor driver initialization
 CytronMD motorLeft(PWM_PWM, 10, 11);
 CytronMD motorRight(PWM_PWM, 5, 6);
 
 float angularZ = 0; // Angular displacement around Z-axis in degrees
-unsigned long prevTime = 0;
+unsigned long prevTime = 0; // For timing calculations
 
+// Function to read data from the MPU6050
 void MPU() {
   Wire.beginTransmission(MPU_addr);
-  Wire.write(0x3B);
+  Wire.write(0x3B); // Start reading from register 0x3B
   Wire.endTransmission(false);
   Wire.requestFrom(MPU_addr, 14, true);
 
+  // Read accelerometer data
   AcX = Wire.read() << 8 | Wire.read();
   AcY = Wire.read() << 8 | Wire.read();
   AcZ = Wire.read() << 8 | Wire.read();
 
+  // Map accelerometer values to angles
   int xAng = map(AcX, minVal, maxVal, -90, 90);
   int yAng = map(AcY, minVal, maxVal, -90, 90);
   int zAng = map(AcZ, minVal, maxVal, -90, 90);
 
+  // Calculate angle using atan2 and convert to degrees
   x = RAD_TO_DEG * (atan2(-yAng, -zAng) + PI);
 }
 
+// Function to read gyro data from the MPU6050
 void readGyroData() {
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x43); // Starting register for gyro data
   Wire.endTransmission(false);
   Wire.requestFrom(MPU_addr, 6, true);
 
+  // Read gyroscope data
   GyX = Wire.read() << 8 | Wire.read();
   GyY = Wire.read() << 8 | Wire.read();
   GyZ = Wire.read() << 8 | Wire.read();
 }
 
+// Interrupt handler for left encoder
 void leftEncoderInterrupt() {
   leftEncoderCount++;
 }
 
+// Interrupt handler for right encoder
 void rightEncoderInterrupt() {
   rightEncoderCount++;
 }
 
+// Function to move the robot forward
 void moveForward() {
   motorLeft.setSpeed(75);
   motorRight.setSpeed(85);
 }
 
+// Function to turn the robot right
 void turnRight() {
   motorLeft.setSpeed(-180);
   motorRight.setSpeed(200);
 }
 
+// Function to turn the robot left
 void turnLeft() {
   motorLeft.setSpeed(220);
   motorRight.setSpeed(-200);
 }
 
+// Function to stop the motors
 void motorStop() {
   motorLeft.setSpeed(0);
   motorRight.setSpeed(0);
 }
 
+// Function to perform a 360-degree rotation
 void rotate360() {
   angularZ = 0; // Reset angular displacement
   prevTime = millis();
@@ -126,32 +150,34 @@ void rotate360() {
   }
 
   // Stop motors after completing 360 degrees
-  motorLeft.setSpeed(0);
-  motorRight.setSpeed(0);
+  motorStop();
 }
 
+// Setup function to initialize components
 void setup() {
-  lcd.begin(16,2);
-  lcd.setBacklight(1);
+  lcd.begin(16, 2); // Initialize LCD with 16x2 size
+  lcd.setBacklight(1); // Turn on backlight
 
   pinMode(encoderL, INPUT_PULLUP);  
   pinMode(encoderR, INPUT_PULLUP);  
 
   // Attach interrupts
-  attachPCINT(digitalPinToPCINT(encoderL), leftEncoderInterrupt, CHANGE);           // Pin change interrupt for A5
-  attachInterrupt(digitalPinToInterrupt(encoderR), rightEncoderInterrupt, CHANGE);  // Hardware interrupt for pin 13
+  attachPCINT(digitalPinToPCINT(encoderL), leftEncoderInterrupt, CHANGE); // Pin change interrupt for A5
+  attachInterrupt(digitalPinToInterrupt(encoderR), rightEncoderInterrupt, CHANGE); // Hardware interrupt for pin 13
 
-  Wire.begin();
+  Wire.begin(); // Initialize I2C communication
   Wire.beginTransmission(MPU_addr);
-  Wire.write(0x6B);
+  Wire.write(0x6B); // Wake up MPU6050
   Wire.write(0);
   Wire.endTransmission(true);
 
-  Serial.begin(9600);
+  Serial.begin(9600); // Start serial communication
 }
 
+// Main loop function
 void loop() {
-  while (flag1) {
+  // Various states controlled by flags to perform actions sequentially
+  while (flag1) { 
     MPU();
     Serial.print("x: ");
     Serial.println(x);  // Debugging output
@@ -163,118 +189,112 @@ void loop() {
       int x_temp = x; 
       motorStop();
       lcd.print("Angle: ");
-      lcd.print(x_temp,1);
+      lcd.print(x_temp, 1);
       delay(4000);
       flag2 = true;
       flag1 = false;
     }
- }
+  }
   
-  while (flag2) {
-    MPU();
+while (flag2) { // Enter this block if flag2 is true
+    MPU(); // Read data from the MPU6050 sensor
     Serial.print("x2: ");
-    Serial.println(x);
+    Serial.println(x); // Debugging: print the angle x
     if (x > 2) {
-      motorLeft.setSpeed(200);
+      motorLeft.setSpeed(200); // Move forward at high speed
       motorRight.setSpeed(200);
     } 
     else {
-      motorStop();
-      motorLeft.setSpeed(100);
+      motorStop(); // Stop both motors
+      motorLeft.setSpeed(100); // Move forward briefly at a slower speed
       motorRight.setSpeed(100);
       delay(300);
-      motorStop();
-      delay(4000);
-      rotate360(); // Perform a 360-degree tu
-      // motorLeft.setSpeed(80);
-      // motorRight.setSpeed(80);
-      // delay(900);      
+      motorStop(); // Stop again
+      delay(4000); // Pause for 4 seconds
+      rotate360(); // Perform a 360-degree rotation
       motorStop(); 
-      MPU();
-      flag3 = true;
-      flag2 = false;
+      MPU(); // Update MPU data
+      flag3 = true; // Set the next flag (flag3) for the next stage
+      flag2 = false; // Reset flag2 to exit this block
     }
   }
-      //subject to change
-  while (flag3){
-    MPU();
+
+  while (flag3) { // Enter this block if flag3 is true
+    MPU(); // Read data from MPU6050
     Serial.print("x3: ");
-    Serial.println(x);
-    if (x<240 || x>260) {
-      motorLeft.setSpeed(100);
+    Serial.println(x); // Debugging: print the angle x
+    if (x < 240 || x > 260) {
+      motorLeft.setSpeed(100); // Slight adjustment to move forward
       motorRight.setSpeed(80);
     } 
-
-    else if (x>240 && x<260){
-      motorStop();
-      flag4 = true;
-      flag3 = false;
+    else if (x > 240 && x < 260) {
+      motorStop(); // Stop if x is in the desired range
+      flag4 = true; // Set the next flag (flag4) for the next stage
+      flag3 = false; // Reset flag3 to exit this block
     }
   }
-      
-  while (flag4){
-    MPU();
+
+  while (flag4) { // Enter this block if flag4 is true
+    MPU(); // Read data from MPU6050
     Serial.print("x4: ");
-    Serial.println(x);
-    if (x>3) {
-      motorLeft.setSpeed(100);
+    Serial.println(x); // Debugging: print the angle x
+    if (x > 3) {
+      motorLeft.setSpeed(100); // Move forward with slight adjustments
       motorRight.setSpeed(80);
     }
-    else if (x<3){
-      motorStop();
-      delay(2000);      
-      flag5 = true;
-      flag4 = false;
+    else if (x < 3) {
+      motorStop(); // Stop if x is in the desired range
+      delay(2000); // Pause for 2 seconds
+      flag5 = true; // Set the next flag (flag5) for the next stage
+      flag4 = false; // Reset flag4 to exit this block
     } 
-  }  
+  }
 
+  // Reset encoder counts and time for distance tracking
   leftEncoderCount = -20;
   rightEncoderCount = -20;
   timeTaken = 0;
 
-  while (flag5){
-    timeTaken = millis();
-    timeTaken = timeTaken/1000;
-    IR_left = digitalRead(A2);
-    IR_right = digitalRead(A3);
+  while (flag5) { // Enter this block if flag5 is true
+    timeTaken = millis(); // Get elapsed time since program started
+    timeTaken = timeTaken / 1000; // Convert milliseconds to seconds
+    IR_left = digitalRead(A2); // Read left IR sensor
+    IR_right = digitalRead(A3); // Read right IR sensor
 
     if (IR_left == 1 && IR_right == 1) {
-      moveForward();
+      moveForward(); // Move forward if both IR sensors detect a clear path
     }
-
     else if (IR_left == 1 && IR_right == 0) {
-      turnLeft();
+      turnLeft(); // Turn left if the right sensor detects an obstacle
     }
-
     else if (IR_left == 0 && IR_right == 1) {
-      turnRight();
+      turnRight(); // Turn right if the left sensor detects an obstacle
     }
-  
     else if (IR_left == 0 && IR_right == 0) {
-      motorStop();
-      flag5 = false;
+      motorStop(); // Stop if both sensors detect obstacles
+      flag5 = false; // Exit the loop by resetting flag5
     }
 
-
+    // Calculate distances based on encoder counts
     float leftDistance = (leftEncoderCount / (float)pulsesPerRevolution) * wheelCircumference;
     float rightDistance = (rightEncoderCount / (float)pulsesPerRevolution) * wheelCircumference;
 
-    // Calculate average distance
+    // Calculate average distance traveled
     float distance = (leftDistance + rightDistance) / 2.0;
-    distance_temp = int (distance);
+    distance_temp = int(distance);
 
-    if (distance_temp==180){
+    if (distance_temp == 180) { // Stop if the distance reaches 180 cm
       motorStop();
-      delay(2000);
+      delay(2000); // Pause for 2 seconds
     }
 
-    // Display on LCD
+    // Display distance and elapsed time on the LCD
     lcd.setCursor(0, 0);
     lcd.print("Distance:");
     lcd.print(distance);
     lcd.print(" cm");
 
-    lcd.setCursor(0,1);
+    lcd.setCursor(0, 1);
     lcd.print("Time: ");
     lcd.print(timeTaken);
     lcd.print("s");
