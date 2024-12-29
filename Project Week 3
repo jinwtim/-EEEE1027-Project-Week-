@@ -1,0 +1,282 @@
+A#include "CytronMotorDriver.h"
+#include <Wire.h>
+#include <Adafruit_LiquidCrystal.h>
+#include <PinChangeInterrupt.h> 
+
+Adafruit_LiquidCrystal lcd(8,9,7,2,3,4);
+
+const int MPU_addr = 0x68;
+int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
+
+unsigned long timeTaken;
+
+int minVal = 265;
+int maxVal = 402;
+
+float distance;
+int distance_temp;
+
+double x;
+double y;
+double z;
+
+bool flag1 = true;
+bool flag2 = false;
+bool flag3 = false;
+bool flag4 = false;
+bool flag5 = false;
+
+int IR_left;
+int IR_right;
+
+volatile int leftEncoderCount = 0;   // Count pulses for left encoder
+volatile int rightEncoderCount = 0; // Count pulses for right encoder
+
+const int encoderL = 13;  // Left encoder connected to A5
+const int encoderR = 12;  // Right encoder connected to pin 13
+
+const float wheelCircumference = 20.106; // Circumference in cm (radius = 3.2 cm)
+const int pulsesPerRevolution = 20;      // Number of pulses per wheel rotation
+
+CytronMD motorLeft(PWM_PWM, 10, 11);
+CytronMD motorRight(PWM_PWM, 5, 6);
+
+float angularZ = 0; // Angular displacement around Z-axis in degrees
+unsigned long prevTime = 0;
+
+void MPU() {
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr, 14, true);
+
+  AcX = Wire.read() << 8 | Wire.read();
+  AcY = Wire.read() << 8 | Wire.read();
+  AcZ = Wire.read() << 8 | Wire.read();
+
+  int xAng = map(AcX, minVal, maxVal, -90, 90);
+  int yAng = map(AcY, minVal, maxVal, -90, 90);
+  int zAng = map(AcZ, minVal, maxVal, -90, 90);
+
+  x = RAD_TO_DEG * (atan2(-yAng, -zAng) + PI);
+}
+
+void readGyroData() {
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x43); // Starting register for gyro data
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr, 6, true);
+
+  GyX = Wire.read() << 8 | Wire.read();
+  GyY = Wire.read() << 8 | Wire.read();
+  GyZ = Wire.read() << 8 | Wire.read();
+}
+
+void leftEncoderInterrupt() {
+  leftEncoderCount++;
+}
+
+void rightEncoderInterrupt() {
+  rightEncoderCount++;
+}
+
+void moveForward() {
+  motorLeft.setSpeed(75);
+  motorRight.setSpeed(85);
+}
+
+void turnRight() {
+  motorLeft.setSpeed(-180);
+  motorRight.setSpeed(200);
+}
+
+void turnLeft() {
+  motorLeft.setSpeed(220);
+  motorRight.setSpeed(-200);
+}
+
+void motorStop() {
+  motorLeft.setSpeed(0);
+  motorRight.setSpeed(0);
+}
+
+void rotate360() {
+  angularZ = 0; // Reset angular displacement
+  prevTime = millis();
+
+  motorLeft.setSpeed(-255); // Set motors to rotate in place
+  motorRight.setSpeed(255);
+
+  while (angularZ < 355) {
+    readGyroData();
+
+    unsigned long currentTime = millis();
+    float deltaTime = (currentTime - prevTime) / 1000.0; // Convert ms to seconds
+    prevTime = currentTime;
+
+    // Convert gyro data to degrees/sec (sensitivity factor is usually 131 for MPU6050)
+    float gyroZrate = GyZ / 131.0;
+
+    // Integrate gyro rate to estimate angle
+    angularZ += gyroZrate * deltaTime;
+
+    // Debugging output
+    Serial.print("Angle: ");
+    Serial.println(angularZ);
+  }
+
+  // Stop motors after completing 360 degrees
+  motorLeft.setSpeed(0);
+  motorRight.setSpeed(0);
+}
+
+void setup() {
+  lcd.begin(16,2);
+  lcd.setBacklight(1);
+
+  pinMode(encoderL, INPUT_PULLUP);  
+  pinMode(encoderR, INPUT_PULLUP);  
+
+  // Attach interrupts
+  attachPCINT(digitalPinToPCINT(encoderL), leftEncoderInterrupt, CHANGE);           // Pin change interrupt for A5
+  attachInterrupt(digitalPinToInterrupt(encoderR), rightEncoderInterrupt, CHANGE);  // Hardware interrupt for pin 13
+
+  Wire.begin();
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
+
+  Serial.begin(9600);
+}
+
+void loop() {
+  while (flag1) {
+    MPU();
+    Serial.print("x: ");
+    Serial.println(x);  // Debugging output
+    if (x < 24 || x > 30) {
+      motorLeft.setSpeed(80);
+      motorRight.setSpeed(80);
+    } 
+    else if (x > 24 && x < 30) {
+      int x_temp = x; 
+      motorStop();
+      lcd.print("Angle: ");
+      lcd.print(x_temp,1);
+      delay(4000);
+      flag2 = true;
+      flag1 = false;
+    }
+ }
+  
+  while (flag2) {
+    MPU();
+    Serial.print("x2: ");
+    Serial.println(x);
+    if (x > 2) {
+      motorLeft.setSpeed(200);
+      motorRight.setSpeed(200);
+    } 
+    else {
+      motorStop();
+      motorLeft.setSpeed(100);
+      motorRight.setSpeed(100);
+      delay(300);
+      motorStop();
+      delay(4000);
+      rotate360(); // Perform a 360-degree tu
+      // motorLeft.setSpeed(80);
+      // motorRight.setSpeed(80);
+      // delay(900);      
+      motorStop(); 
+      MPU();
+      flag3 = true;
+      flag2 = false;
+    }
+  }
+      //subject to change
+  while (flag3){
+    MPU();
+    Serial.print("x3: ");
+    Serial.println(x);
+    if (x<240 || x>260) {
+      motorLeft.setSpeed(100);
+      motorRight.setSpeed(80);
+    } 
+
+    else if (x>240 && x<260){
+      motorStop();
+      flag4 = true;
+      flag3 = false;
+    }
+  }
+      
+  while (flag4){
+    MPU();
+    Serial.print("x4: ");
+    Serial.println(x);
+    if (x>3) {
+      motorLeft.setSpeed(100);
+      motorRight.setSpeed(80);
+    }
+    else if (x<3){
+      motorStop();
+      delay(2000);      
+      flag5 = true;
+      flag4 = false;
+    } 
+  }  
+
+  leftEncoderCount = -20;
+  rightEncoderCount = -20;
+  timeTaken = 0;
+
+  while (flag5){
+    timeTaken = millis();
+    timeTaken = timeTaken/1000;
+    IR_left = digitalRead(A2);
+    IR_right = digitalRead(A3);
+
+    if (IR_left == 1 && IR_right == 1) {
+      moveForward();
+    }
+
+    else if (IR_left == 1 && IR_right == 0) {
+      turnLeft();
+    }
+
+    else if (IR_left == 0 && IR_right == 1) {
+      turnRight();
+    }
+  
+    else if (IR_left == 0 && IR_right == 0) {
+      motorStop();
+      flag5 = false;
+    }
+
+
+    float leftDistance = (leftEncoderCount / (float)pulsesPerRevolution) * wheelCircumference;
+    float rightDistance = (rightEncoderCount / (float)pulsesPerRevolution) * wheelCircumference;
+
+    // Calculate average distance
+    float distance = (leftDistance + rightDistance) / 2.0;
+    distance_temp = int (distance);
+
+    if (distance_temp==180){
+      motorStop();
+      delay(2000);
+    }
+
+    // Display on LCD
+    lcd.setCursor(0, 0);
+    lcd.print("Distance:");
+    lcd.print(distance);
+    lcd.print(" cm");
+
+    lcd.setCursor(0,1);
+    lcd.print("Time: ");
+    lcd.print(timeTaken);
+    lcd.print("s");
+  }
+}
